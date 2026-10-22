@@ -1,16 +1,332 @@
 ---
+const feedbacks = [
+  {
+    name: "Anna",
+    category: "Suggestion",
+    message: "It would be great to have a dark mode!",
+    date: "October 20, 2026",
+  },
+  {
+    name: "James",
+    category: "Bug",
+    message: "The contact form is not working on mobile.",
+    date: "October 19, 2026",
+  },
+  {
+    name: "Sofia",
+    category: "Compliment",
+    message: "Really clean and easy-to-use website!",
+    date: "October 18, 2026",
+  },
+];
 ---
 
 <html lang="en">
-	<head>
-		<meta charset="utf-8" />
-		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-		<link rel="icon" href="/favicon.ico" />
-		<meta name="viewport" content="width=device-width" />
-		<meta name="generator" content={Astro.generator} />
-		<title>Astro</title>
-	</head>
-	<body>
-		<h1>Astro</h1>
-	</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Feedback Board</title>
+  </head>
+
+  <body>
+    <main class="container">
+      <header class="hero">
+        <span class="eyebrow">WELCOME TO FEEDBACK BOARD</span>
+        <h1>Have something to share?</h1>
+        <p>
+          Help us improve by sharing your ideas,
+          reporting bugs or leaving a compliment.
+        </p>
+      </header>
+
+      <section class="panel">
+        <h2>Leave your feedback</h2>
+        <p class="subtitle">We would love to hear from you.</p>
+
+        <form id="feedback-form">
+          <label for="name">Your name</label>
+          <input
+            id="name"
+            name="name"
+            type="text"
+            placeholder="Enter your name"
+            required
+            maxlength="60"
+          />
+
+          <label for="category">Category</label>
+          <select id="category" name="category" required>
+            <option value="">Select a category</option>
+            <option value="Suggestion">Suggestion</option>
+            <option value="Bug">Bug</option>
+            <option value="Compliment">Compliment</option>
+          </select>
+
+          <label for="message">Your message</label>
+          <textarea
+            id="message"
+            name="message"
+            rows="5"
+            placeholder="Tell us what you think..."
+            required
+            maxlength="500"
+          ></textarea>
+
+          <button type="submit">Submit feedback →</button>
+          <p id="form-status" role="status" aria-live="polite"></p>
+        </form>
+      </section>
+
+      <section class="feedback-section">
+        <div class="section-heading">
+          <div>
+            <h2>Community feedback</h2>
+            <p class="subtitle">
+              See what other people are saying.
+            </p>
+          </div>
+          <span class="count">{feedbacks.length} feedbacks</span>
+        </div>
+
+        <div class="feedback-list" id="feedback-list">
+          {feedbacks.map((feedback) => (
+            <article class="feedback-card">
+              <div class="card-top">
+                <strong>{feedback.name}</strong>
+                <span class="tag">{feedback.category}</span>
+              </div>
+              <p>{feedback.message}</p>
+              <small>{feedback.date}</small>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <footer>
+        Feedback Board · DevOps University Project
+      </footer>
+    </main>
+
+    <script>
+      const form = document.querySelector<HTMLFormElement>(
+        "#feedback-form"
+      );
+
+      const status = document.querySelector<HTMLElement>(
+        "#form-status"
+      );
+
+      form?.addEventListener("submit", (event) => {
+        event.preventDefault();
+
+        if (status) {
+          status.textContent =
+            "The form is ready! Database integration comes next.";
+        }
+      });
+    </script>
+  </body>
 </html>
+
+<style>
+  :global(*) {
+    box-sizing: border-box;
+  }
+
+  :global(body) {
+    margin: 0;
+    background: #f7f8fc;
+    color: #22243a;
+    font-family: Arial, Helvetica, sans-serif;
+    line-height: 1.6;
+  }
+
+  .container {
+    width: min(100% - 32px, 760px);
+    margin: 0 auto;
+  }
+
+  .hero {
+    text-align: center;
+    padding: 75px 0 45px;
+  }
+
+  .eyebrow {
+    color: #7058d8;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 2px;
+  }
+
+  h1 {
+    font-size: clamp(32px, 6vw, 46px);
+    line-height: 1.15;
+    margin: 15px 0;
+  }
+
+  h2 {
+    font-size: 23px;
+    margin: 0;
+  }
+
+  .hero p {
+    color: #777b91;
+    max-width: 460px;
+    margin: 0 auto;
+  }
+
+  .panel,
+  .feedback-card {
+    background: white;
+    border: 1px solid #e9eaf2;
+    border-radius: 16px;
+    box-shadow: 0 5px 25px rgba(30, 25, 70, 0.035);
+  }
+
+  .panel {
+    padding: 32px;
+  }
+
+  .subtitle {
+    color: #82869b;
+    font-size: 14px;
+    margin: 6px 0 24px;
+  }
+
+  form {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  label {
+    font-weight: 600;
+    font-size: 14px;
+    margin-top: 9px;
+  }
+
+  input,
+  select,
+  textarea {
+    width: 100%;
+    padding: 13px 14px;
+    border: 1px solid #dfe1eb;
+    border-radius: 9px;
+    font: inherit;
+    font-size: 14px;
+    background: white;
+    color: #22243a;
+  }
+
+  input:focus,
+  select:focus,
+  textarea:focus {
+    outline: 2px solid #b7aafa;
+    border-color: #7058d8;
+  }
+
+  textarea {
+    resize: vertical;
+  }
+
+  button {
+    background: #7058d8;
+    color: white;
+    border: 0;
+    border-radius: 9px;
+    padding: 15px;
+    margin-top: 13px;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  button:hover {
+    background: #5c43c5;
+  }
+
+  #form-status {
+    color: #55714a;
+    font-size: 13px;
+    margin: 0;
+  }
+
+  .feedback-section {
+    margin-top: 55px;
+  }
+
+  .section-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .count {
+    color: #7058d8;
+    background: #ece8ff;
+    padding: 6px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: bold;
+    white-space: nowrap;
+  }
+
+  .feedback-list {
+    display: grid;
+    gap: 15px;
+  }
+
+  .feedback-card {
+    padding: 23px;
+  }
+
+  .card-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .tag {
+    background: #f0edff;
+    color: #7058d8;
+    padding: 5px 10px;
+    border-radius: 15px;
+    font-size: 12px;
+  }
+
+  .feedback-card p {
+    margin: 13px 0;
+    font-size: 14px;
+  }
+
+  small {
+    color: #9a9caf;
+  }
+
+  footer {
+    text-align: center;
+    padding: 55px 0 30px;
+    color: #a0a2b2;
+    font-size: 12px;
+  }
+
+  @media (max-width: 600px) {
+    .hero {
+      padding-top: 45px;
+    }
+
+    .panel {
+      padding: 22px;
+    }
+
+    .section-heading {
+      align-items: flex-start;
+    }
+
+    .feedback-card {
+      padding: 18px;
+    }
+  }
+</style>
