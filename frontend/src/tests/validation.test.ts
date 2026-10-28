@@ -1,54 +1,70 @@
 import { describe, it, expect } from "vitest";
 import { validateFeedback } from "../lib/validation";
 
-describe("Feedback Validation", () => {
+describe("Feedback validation", () => {
+
   it("accepts valid feedback", () => {
-    const result = validateFeedback({
+    expect(validateFeedback({
       name: "Anna",
       category: "Suggestion",
-      message: "Great website!",
-    });
-
-    expect(result).toBe(true);
+      message: "Great website!"
+    })).toBe(true);
   });
 
   it("rejects an empty name", () => {
-    const result = validateFeedback({
+    expect(validateFeedback({
       name: "",
       category: "Bug",
-      message: "Something is broken",
-    });
-
-    expect(result).toBe(false);
+      message: "Something is broken"
+    })).toBe(false);
   });
 
   it("rejects an empty message", () => {
-    const result = validateFeedback({
+    expect(validateFeedback({
       name: "James",
       category: "Bug",
-      message: "",
-    });
-
-    expect(result).toBe(false);
+      message: ""
+    })).toBe(false);
   });
 
-  it("rejects an invalid category", () => {
-    const result = validateFeedback({
+  it("rejects invalid categories", () => {
+    expect(validateFeedback({
       name: "Sofia",
       category: "Other",
-      message: "Nice work!",
-    });
+      message: "Nice work!"
+    })).toBe(false);
+  });
 
-    expect(result).toBe(false);
+  it("rejects names longer than 60 characters", () => {
+    expect(validateFeedback({
+      name: "A".repeat(61),
+      category: "Suggestion",
+      message: "Great website!"
+    })).toBe(false);
   });
 
   it("rejects messages longer than 500 characters", () => {
-    const result = validateFeedback({
+    expect(validateFeedback({
       name: "Anna",
       category: "Compliment",
-      message: "A".repeat(501),
-    });
-
-    expect(result).toBe(false);
+      message: "A".repeat(501)
+    })).toBe(false);
   });
+
+  it("rejects whitespace-only messages", () => {
+    expect(validateFeedback({
+      name: "Anna",
+      category: "Bug",
+      message: "   "
+    })).toBe(false);
+  });
+
+  it("rejects whitespace-only names", () => {
+    expect(validateFeedback({
+      name: "   ",
+      category: "Suggestion",
+      message: "Great website!"
+    })).toBe(false);
+  });
+
 });
