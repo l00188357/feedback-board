@@ -1,6 +1,6 @@
 import { experimental_AstroContainer as AstroContainer } from 'astro/container';
 import { expect, test } from 'vitest';
-import IndexPage from './index.astro';
+import IndexPage from '../pages/index.astro';
 
 test('Homepage renders the main heading correctly', async () => {
   const container = await AstroContainer.create();
