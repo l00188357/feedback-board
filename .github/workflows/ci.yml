@@ -36,6 +36,9 @@ jobs:
 
       - name: Build application
         run: npm run build
+        
+      - name: Run Tests
+        run: npm run test
 
       - name: Verify build output
         run: test -f dist/index.html
