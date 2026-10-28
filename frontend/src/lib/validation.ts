@@ -10,21 +10,22 @@ const allowedCategories = [
   "Compliment",
 ];
 
-export function validateFeedback(
-  feedback: Feedback
-): boolean {
-  if (!feedback.name.trim() || feedback.name.length > 60) {
+export function validateFeedback(feedback: Feedback): boolean {
+  const name = feedback.name.trim();
+  const message = feedback.message.trim();
+
+  // Validate name
+  if (name.length === 0 || name.length > 60) {
     return false;
   }
 
+  // Validate category
   if (!allowedCategories.includes(feedback.category)) {
     return false;
   }
 
-  if (
-    !feedback.message.trim() ||
-    feedback.message.length > 500
-  ) {
+  // Validate message
+  if (message.length === 0 || message.length > 500) {
     return false;
   }
 
