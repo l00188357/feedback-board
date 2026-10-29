@@ -52,7 +52,7 @@ jobs:
           exit-code: '1'
           severity: 'CRITICAL,HIGH'
       - name: Build Docker Image
-        run: docker build -t feedback-board-frontend:latest ./frontend
-        
+        run: docker build -t feedback-board-frontend:latest ./
+
       - name: Verify build output
         run: test -f dist/index.html
