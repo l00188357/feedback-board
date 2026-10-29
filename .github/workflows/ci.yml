@@ -40,5 +40,17 @@ jobs:
       - name: Run Tests
         run: npm run test
 
+      - name: Run ESLint
+        run: npm run lint
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: 'frontend'
+          format: 'table'
+          exit-code: '1'
+          severity: 'CRITICAL,HIGH'
+          
       - name: Verify build output
         run: test -f dist/index.html
