@@ -1,10 +1,26 @@
+# Dependencies and build outputs
 node_modules/
 dist/
 .astro/
+
+# Environment variables
 .env
 .env.*
 !.env.example
-.DS_Store
+
+# PocketBase local database
 backend/pb_data/
-# PocketBase executable
+
+# PocketBase local executables
 backend/pocketbase.exe
+backend/pocketbase
+
+# Logs
+*.log
+
+# Operating system files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.idea/
