@@ -6,8 +6,8 @@ FROM node:22-alpine AS builder
 # Set the working directory inside the container
 WORKDIR /app
 
-# Copy package files first (this leverages Docker's caching to speed up builds)
-COPY package*.json ./
+# Copy package files first 
+COPY package*.json package-lock.json ./
 
 # Install dependencies
 RUN npm ci
@@ -21,7 +21,7 @@ RUN npm run build
 # ==========================================
 # Stage 2: Serve the application with Nginx
 # ==========================================
-FROM nginx:alpine AS production
+FROM nginxinc/nginx-unprivileged:stable-alpine AS production
 
 # Remove the default Nginx static assets
 RUN rm -rf /usr/share/nginx/html/*
@@ -29,8 +29,8 @@ RUN rm -rf /usr/share/nginx/html/*
 # Copy the built static files from the builder stage
 COPY --from=builder /app/dist /usr/share/nginx/html
 
-# Expose port 80
-EXPOSE 80
+# Expose port 8080
+EXPOSE 8080
 
-# Start Nginx in the foreground
-CMD ["nginx", "-g", "daemon off;"]
+HEALTHCHECK --interval=30s --timeout=3s \
+  CMD wget -qO- http://127.0.0.1:8080/ >/dev/null || exit 1
