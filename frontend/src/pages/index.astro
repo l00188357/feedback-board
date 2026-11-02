@@ -1,24 +1,5 @@
 ---
-const feedbacks = [
-  {
-    name: "Anna",
-    category: "Suggestion",
-    message: "It would be great to have a dark mode!",
-    date: "October 20, 2026",
-  },
-  {
-    name: "James",
-    category: "Bug",
-    message: "The contact form is not working on mobile.",
-    date: "October 19, 2026",
-  },
-  {
-    name: "Sofia",
-    category: "Compliment",
-    message: "Really clean and easy-to-use website!",
-    date: "October 18, 2026",
-  },
-];
+// Feedbacks are loaded from PocketBase in the browser.
 ---
 
 <html lang="en">
@@ -34,8 +15,8 @@ const feedbacks = [
         <span class="eyebrow">WELCOME TO FEEDBACK BOARD</span>
         <h1>Have something to share?</h1>
         <p>
-          Help us improve by sharing your ideas,
-          reporting bugs or leaving a compliment.
+          Help us improve by sharing your ideas, reporting bugs or leaving a
+          compliment.
         </p>
       </header>
 
@@ -81,70 +62,155 @@ const feedbacks = [
         <div class="section-heading">
           <div>
             <h2>Community feedback</h2>
-            <p class="subtitle">
-              See what other people are saying.
-            </p>
+            <p class="subtitle">See what other people are saying.</p>
           </div>
-          <span class="count">{feedbacks.length} feedbacks</span>
+          <span class="count" id="feedback-count">0 feedbacks</span>
         </div>
 
-        <div class="feedback-list" id="feedback-list">
-          {feedbacks.map((feedback) => (
-            <article class="feedback-card">
-              <div class="card-top">
-                <strong>{feedback.name}</strong>
-                <span class="tag">{feedback.category}</span>
-              </div>
-              <p>{feedback.message}</p>
-              <small>{feedback.date}</small>
-            </article>
-          ))}
+        <div class="feedback-list" id="feedback-list" aria-live="polite">
+          <p>Loading feedbacks...</p>
         </div>
       </section>
 
-      <footer>
-        Feedback Board · DevOps University Project
-      </footer>
+      <footer>Feedback Board · DevOps University Project</footer>
     </main>
 
     <script>
-  import { validateFeedback } from "../lib/validation";
+      import { validateFeedback } from "../lib/validation";
+      import { createFeedback, getFeedbacks } from "../lib/api";
+      import type { FeedbackRecord } from "../lib/api";
 
-  const form = document.querySelector<HTMLFormElement>(
-    "#feedback-form"
-  );
+      const form = document.querySelector<HTMLFormElement>("#feedback-form");
+      const status = document.querySelector<HTMLElement>("#form-status");
+      const list = document.querySelector<HTMLElement>("#feedback-list");
+      const count = document.querySelector<HTMLElement>("#feedback-count");
 
-  const status = document.querySelector<HTMLElement>(
-    "#form-status"
-  );
+      function displayFeedbacks(feedbacks: FeedbackRecord[]) {
+        if (!list) return;
 
-  form?.addEventListener("submit", (event) => {
-    event.preventDefault();
+        list.replaceChildren();
 
-    const formData = new FormData(form);
+        if (count) {
+          count.textContent = `${feedbacks.length} feedback${feedbacks.length === 1 ? "" : "s"}`;
+        }
 
-    const feedback = {
-      name: String(formData.get("name") ?? ""),
-      category: String(formData.get("category") ?? ""),
-      message: String(formData.get("message") ?? ""),
-    };
+        if (feedbacks.length === 0) {
+          const emptyMessage = document.createElement("p");
+          emptyMessage.textContent = "No feedback yet. Be the first!";
+          list.appendChild(emptyMessage);
+          return;
+        }
 
-    if (!validateFeedback(feedback)) {
-      if (status) {
-        status.textContent =
-          "Please complete all fields with valid information.";
-        status.style.color = "#dc2626";
+        for (const feedback of feedbacks) {
+          const card = document.createElement("article");
+          card.className = "feedback-card";
+
+          const cardTop = document.createElement("div");
+          cardTop.className = "card-top";
+
+          const name = document.createElement("strong");
+          name.textContent = feedback.name;
+
+          const category = document.createElement("span");
+          category.className = "tag";
+          category.textContent = feedback.category;
+
+          cardTop.append(name, category);
+
+          const message = document.createElement("p");
+          message.textContent = feedback.message;
+
+          const date = document.createElement("small");
+          const createdDate = new Date(feedback.created);
+          date.textContent = Number.isNaN(createdDate.getTime())
+            ? ""
+            : createdDate.toLocaleDateString("en-US", {
+                year: "numeric",
+                month: "long",
+                day: "numeric",
+              });
+
+          card.append(cardTop, message, date);
+          list.appendChild(card);
+        }
       }
-      return;
-    }
 
-    if (status) {
-      status.textContent =
-        "Feedback validated successfully! Database integration comes next.";
-      status.style.color = "#15803d";
-    }
-  });
-</script>
+      async function loadFeedbacks(): Promise<boolean> {
+        try {
+          const feedbacks = await getFeedbacks();
+          displayFeedbacks(feedbacks);
+          return true;
+        } catch (error) {
+          console.error("Failed to load feedbacks:", error);
+
+          if (list) {
+            list.textContent =
+              "Could not load feedbacks. Please try again later.";
+          }
+          return false;
+        }
+      }
+
+      form?.addEventListener("submit", async (event) => {
+        event.preventDefault();
+
+        const formData = new FormData(form);
+        const feedback = {
+          name: String(formData.get("name") ?? "").trim(),
+          category: String(formData.get("category") ?? ""),
+          message: String(formData.get("message") ?? "").trim(),
+        };
+
+        if (!validateFeedback(feedback)) {
+          if (status) {
+            status.textContent =
+              "Please complete all fields with valid information.";
+            status.style.color = "#dc2626";
+          }
+          return;
+        }
+
+        const submitButton = form.querySelector<HTMLButtonElement>(
+          'button[type="submit"]'
+        );
+
+        if (submitButton) submitButton.disabled = true;
+
+        if (status) {
+          status.textContent = "Submitting feedback...";
+          status.style.color = "#7058d8";
+        }
+
+        try {
+          await createFeedback(feedback);
+          form.reset();
+
+          if (status) {
+            status.textContent = "Feedback submitted successfully!";
+            status.style.color = "#15803d";
+          }
+
+          const refreshed = await loadFeedbacks();
+          if (!refreshed && status) {
+            status.textContent =
+              "Feedback saved, but the list could not be refreshed.";
+            status.style.color = "#b45309";
+          }
+        } catch (error) {
+          console.error("Failed to submit feedback:", error);
+
+          if (status) {
+            status.textContent =
+              "Could not submit feedback. Please try again.";
+            status.style.color = "#dc2626";
+          }
+        } finally {
+          if (submitButton) submitButton.disabled = false;
+        }
+      });
+
+      void loadFeedbacks();
+    </script>
   </body>
 </html>
 
@@ -167,8 +233,8 @@ const feedbacks = [
   }
 
   .hero {
-    text-align: center;
     padding: 75px 0 45px;
+    text-align: center;
   }
 
   .eyebrow {
@@ -196,7 +262,7 @@ const feedbacks = [
   }
 
   .panel,
-  .feedback-card {
+  .feedback-list :global(.feedback-card) {
     background: white;
     border: 1px solid #e9eaf2;
     border-radius: 16px;
@@ -265,6 +331,11 @@ const feedbacks = [
     background: #5c43c5;
   }
 
+  button:disabled {
+    cursor: not-allowed;
+    opacity: 0.65;
+  }
+
   #form-status {
     color: #55714a;
     font-size: 13px;
@@ -297,18 +368,18 @@ const feedbacks = [
     gap: 15px;
   }
 
-  .feedback-card {
+  .feedback-list :global(.feedback-card) {
     padding: 23px;
   }
 
-  .card-top {
+  .feedback-list :global(.card-top) {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 10px;
   }
 
-  .tag {
+  .feedback-list :global(.tag) {
     background: #f0edff;
     color: #7058d8;
     padding: 5px 10px;
@@ -316,12 +387,12 @@ const feedbacks = [
     font-size: 12px;
   }
 
-  .feedback-card p {
+  .feedback-list :global(.feedback-card p) {
     margin: 13px 0;
     font-size: 14px;
   }
 
-  small {
+  .feedback-list :global(.feedback-card small) {
     color: #9a9caf;
   }
 
@@ -345,7 +416,7 @@ const feedbacks = [
       align-items: flex-start;
     }
 
-    .feedback-card {
+    .feedback-list :global(.feedback-card) {
       padding: 18px;
     }
   }
