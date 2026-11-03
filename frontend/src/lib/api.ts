@@ -1,8 +1,8 @@
 import type { Feedback } from "./validation";
 
-const API_URL =
-  import.meta.env.PUBLIC_POCKETBASE_URL || "http://127.0.0.1:8090";
-
+// In local development, set PUBLIC_POCKETBASE_URL in frontend/.env.
+// In Docker, use same-origin /api via the Nginx reverse proxy.
+const API_URL = (import.meta.env.PUBLIC_POCKETBASE_URL ?? "").replace(/\/$/, "");
 const RECORDS_URL = API_URL + "/api/collections/feedbacks/records";
 
 export interface FeedbackRecord extends Feedback {
@@ -30,14 +30,10 @@ export async function getFeedbacks(): Promise<FeedbackRecord[]> {
   return data.items;
 }
 
-export async function createFeedback(
-  feedback: Feedback
-): Promise<FeedbackRecord> {
+export async function createFeedback(feedback: Feedback): Promise<FeedbackRecord> {
   const response = await fetch(RECORDS_URL, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(feedback),
   });
 
