@@ -1,36 +1,17 @@
-# ==========================================
-# Stage 1: Build the Astro application
-# ==========================================
+# Stage 1: build the Astro static website
 FROM node:22-alpine AS builder
-
-# Set the working directory inside the container
 WORKDIR /app
-
-# Copy package files first (this leverages Docker's caching to speed up builds)
-COPY package*.json ./
-
-# Install dependencies
+COPY package.json package-lock.json ./
 RUN npm ci
-
-# Copy the rest of the application code
 COPY . .
-
-# Build the application
+# Empty URL = same-origin requests through Nginx reverse proxy.
+ENV PUBLIC_POCKETBASE_URL=""
 RUN npm run build
 
-# ==========================================
-# Stage 2: Serve the application with Nginx
-# ==========================================
+# Stage 2: serve the website and proxy the backend API
 FROM nginx:alpine AS production
-
-# Remove the default Nginx static assets
-RUN rm -rf /usr/share/nginx/html/*
-
-# Copy the built static files from the builder stage
-COPY --from=builder /app/dist /usr/share/nginx/html
-
-# Expose port 80
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=builder /app/dist/ /usr/share/nginx/html/
 EXPOSE 80
-
-# Start Nginx in the foreground
-CMD ["nginx", "-g", "daemon off;"]
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s \
+  CMD wget -q -O /dev/null http://127.0.0.1/ || exit 1
