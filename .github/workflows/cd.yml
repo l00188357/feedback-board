@@ -1,0 +1,118 @@
+name: Feedback Board CD - Kubernetes
+
+on:
+  pull_request:
+    branches:
+      - master
+
+  workflow_run:
+    workflows:
+      - Feedback Board CI
+    types:
+      - completed
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  kubernetes-deployment:
+    name: Kubernetes Deployment Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    if: >-
+      github.event_name == 'pull_request' ||
+      github.event.workflow_run.conclusion == 'success'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.4'
+
+      - name: Create Kind Kubernetes cluster
+        uses: helm/kind-action@v1
+        with:
+          version: v0.33.0
+          cluster_name: feedback-board
+          wait: 120s
+
+      - name: Verify Kubernetes cluster
+        run: |
+          kubectl get nodes
+          kubectl cluster-info
+
+      - name: Build Docker images
+        run: |
+          docker build -t feedback-board-backend:dev ./backend
+          docker build -t feedback-board-frontend:dev ./frontend
+
+      - name: Load Docker images into Kind
+        run: |
+          kind load docker-image feedback-board-backend:dev --name feedback-board
+          kind load docker-image feedback-board-frontend:dev --name feedback-board
+
+      - name: Deploy Kubernetes namespace
+        run: kubectl apply -f k8s/namespace.yaml
+
+      - name: Deploy PocketBase storage and backend
+        run: |
+          kubectl apply -f k8s/backend-pvc.yaml
+          kubectl apply -f k8s/backend-deployment.yaml
+          kubectl apply -f k8s/backend-service.yaml
+
+      - name: Deploy Astro frontend
+        run: |
+          kubectl apply -f k8s/frontend-deployment.yaml
+          kubectl apply -f k8s/frontend-service.yaml
+
+      - name: Wait for Kubernetes Deployments
+        run: |
+          kubectl rollout status deployment/backend \
+            -n feedback-board --timeout=180s
+
+          kubectl rollout status deployment/frontend \
+            -n feedback-board --timeout=180s
+
+      - name: Verify Kubernetes resources
+        run: |
+          kubectl get pods -n feedback-board
+          kubectl get services -n feedback-board
+          kubectl get pvc -n feedback-board
+
+      - name: Run Kubernetes smoke tests
+        env:
+          SMOKE_BASE_URL: http://127.0.0.1:8081
+        run: |
+          kubectl port-forward \
+            -n feedback-board \
+            service/frontend 8081:80 \
+            > /tmp/feedback-board-port-forward.log 2>&1 &
+
+          PF_PID=$!
+          trap 'kill "$PF_PID" 2>/dev/null || true' EXIT
+
+          node scripts/smoke-test.mjs
+
+      - name: Collect Kubernetes diagnostics
+        if: always()
+        run: |
+          kubectl get all -n feedback-board || true
+          kubectl get pvc -n feedback-board || true
+          kubectl get events -n feedback-board || true
+
+          kubectl logs deployment/backend \
+            -n feedback-board --tail=100 || true
+
+          kubectl logs deployment/frontend \
+            -n feedback-board --tail=100 || true
+
+          cat /tmp/feedback-board-port-forward.log 2>/dev/null || true
