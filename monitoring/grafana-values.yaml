@@ -95,3 +95,16 @@ dashboardProviders:
 
 dashboardsConfigMaps:
   feedback-board: feedback-board-grafana-dashboard
+
+# ------------------------------------------
+# Alert rule provisioning
+# ------------------------------------------
+# Load frontend and backend availability alerts
+# from the existing Kubernetes ConfigMap.
+
+extraConfigmapMounts:
+  - name: feedback-board-alerts
+    configMap: feedback-board-grafana-alerts
+    mountPath: /etc/grafana/provisioning/alerting/feedback-board-alerts.yaml
+    subPath: feedback-board-alerts.yaml
+    readOnly: true
