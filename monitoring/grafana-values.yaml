@@ -1,0 +1,76 @@
+# ==========================================
+# Grafana - Feedback Board
+# Monitoring with Kubernetes and Helm
+# ==========================================
+
+# Run only one Grafana instance
+replicas: 1
+
+# Prevent two Grafana pods running during updates
+deploymentStrategy:
+  type: Recreate
+
+# ------------------------------------------
+# CPU and memory
+# ------------------------------------------
+# Requests are scheduling reservations.
+# Limits are maximum allowed consumption.
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 1Gi
+  limits:
+    cpu: 2000m
+    memory: 1536Mi
+
+# ------------------------------------------
+# Storage
+# ------------------------------------------
+# Dashboards and alerts will be provisioned
+# from version-controlled configuration.
+# Grafana's local database is not persistent.
+
+persistence:
+  enabled: false
+
+# ------------------------------------------
+# Kubernetes service
+# ------------------------------------------
+
+service:
+  type: ClusterIP
+  port: 80
+
+# ------------------------------------------
+# Startup health check
+# ------------------------------------------
+# Give Grafana time to initialize.
+# Liveness and readiness checks remain enabled
+# after the startup probe succeeds.
+
+startupProbe:
+  httpGet:
+    path: /api/health
+    port: grafana
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 90
+
+# ------------------------------------------
+# Prometheus data source
+# ------------------------------------------
+# Automatically connect Grafana to the
+# Prometheus server in the monitoring namespace.
+
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        uid: prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus-server.monitoring.svc.cluster.local
+        isDefault: true
+        editable: false
