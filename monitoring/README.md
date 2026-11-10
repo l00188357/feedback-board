@@ -1,68 +1,48 @@
 # Feedback Board — Monitoring and Alerting
 
-This directory contains the monitoring configuration for the **Feedback Board** application running in a local **Kind (Kubernetes in Docker)** cluster.
+This directory contains version-controlled configuration for monitoring the Feedback Board application in a local **Kind** Kubernetes cluster. It uses **Prometheus**, **Blackbox Exporter** and **Grafana**.
 
-The monitoring stack consists of:
-
-- **Prometheus:** collects and stores monitoring metrics.
-- **Blackbox Exporter:** sends HTTP probes to the frontend and backend.
-- **Grafana:** visualizes availability and response times and evaluates availability alerts.
-
-The frontend and backend run in the `feedback-board` namespace. Monitoring services run separately in the `monitoring` namespace.
-
-> **Scope:** This is a local development/academic demonstration. It is not a production monitoring deployment. Data retention, access control, notifications, and persistence require additional hardening for production.
+> **Scope:** Local development and academic DevOps demonstration. This setup is not production-hardened. Metrics/Grafana internal data are not persistent, no real external alert notification destination is configured, and centralized log aggregation is not installed.
 
 ## Architecture
 
 ```text
-                       Kind cluster: feedback-board
+Kind cluster: feedback-board
 
-  Namespace: feedback-board               Namespace: monitoring
-  ┌────────────────────────────┐          ┌───────────────────────────┐
-  │ Frontend Service (HTTP /)  │◄─ probe ─│ Blackbox Exporter         │
-  │ Backend Service            │◄─ probe ─│ (HTTP /api/health)        │
-  │ (HTTP :8090/api/health)    │          └─────────────┬─────────────┘
-  └────────────────────────────┘                        │ /probe
-                                           ┌────────────▼────────────┐
-                                           │ Prometheus              │
-                                           │ scrapes every 30 s      │
-                                           └────────────┬────────────┘
-                                                        │ PromQL
-                                           ┌────────────▼────────────┐
-                                           │ Grafana                 │
-                                           │ Dashboard + alert rules │
-                                           └─────────────────────────┘
+Namespace: feedback-board                  Namespace: monitoring
+  frontend Service :80 <---- HTTP probe ---- Blackbox Exporter
+  backend Service :8090 <--- HTTP probe ---- Blackbox Exporter
+                                                ^ /probe
+                                                |
+                                            Prometheus
+                                         scrape every 30s
+                                                |
+                                               PromQL
+                                                |
+                                             Grafana
+                                      dashboard + alert rules
 ```
 
-Blackbox Exporter probes the targets, while **Prometheus scrapes Blackbox Exporter's `/probe` endpoint**. Grafana queries Prometheus; it does not directly probe the application.
+Prometheus **scrapes Blackbox Exporter**, which checks the application endpoints. Grafana queries Prometheus; it does not send HTTP probes directly to the application.
 
-## Repository structure
+## Files
 
-```text
-monitoring/
-├── prometheus-values.yaml           # Lightweight Prometheus configuration and HTTP scrape job
-├── blackbox-values.yaml             # Blackbox Exporter HTTP probe module
-├── grafana-values.yaml              # Grafana resources, data source, dashboard and alert provisioning
-├── apply-dashboard.ps1              # Creates/updates the dashboard ConfigMap from JSON
-├── dashboards/
-│   └── feedback-board.json          # Version-controlled dashboard
-├── alerting/
-│   └── feedback-board-alerts.yaml    # Frontend and backend availability alert rules
-└── README.md
-```
+| Path | Responsibility |
+|---|---|
+| `prometheus-values.yaml` | Lightweight server resources, retention, and the `feedback-board-http` scrape job |
+| `blackbox-values.yaml` | Blackbox HTTP 2xx probing module |
+| `grafana-values.yaml` | Grafana resources, data source and file provisioning |
+| `dashboards/feedback-board.json` | Version-controlled availability/response-time dashboard |
+| `alerting/feedback-board-alerts.yaml` | Two Grafana availability alert rules |
+| `apply-dashboard.ps1` | Creates/updates dashboard ConfigMap on Windows |
+| `apply-alerts.ps1` | Creates/updates alert rules ConfigMap on Windows |
+| `README.md` | This guide |
 
-The alert ConfigMap is currently created by a manual command (documented below); **there is not yet a committed `apply-alerts.ps1` script**. The dashboard and alert ConfigMaps must be created **before** installing/upgrading Grafana because `grafana-values.yaml` references them.
+The ConfigMaps **must exist before Grafana is installed**, because `grafana-values.yaml` references them. The GitHub Actions CD workflow performs the same provisioning using `kubectl` commands on Ubuntu; the PowerShell scripts are for convenient local use.
 
 ## Prerequisites
 
-- Windows PowerShell (commands below use PowerShell syntax).
-- Docker Desktop running **Linux containers**.
-- `kubectl`, `kind`, and Helm installed and available in `PATH`.
-- An existing Kind cluster named `feedback-board`.
-- Frontend and backend deployed to namespace `feedback-board` and reachable through their Kubernetes Services.
-- Internet access to download Helm charts and images on a clean installation.
-
-Check the local environment:
+Docker Desktop (Linux containers), an existing Kind cluster called `feedback-board`, `kubectl`, Helm, and the frontend/backend already deployed in the `feedback-board` namespace. Commands below are for **Windows PowerShell** from the **repository root**.
 
 ```powershell
 kind get clusters
@@ -71,11 +51,9 @@ kubectl get pods -n feedback-board
 helm version
 ```
 
-### Resource planning
+## Resource planning
 
-The local environment used to validate this setup had **2 logical CPUs** and approximately **3.28 GiB of RAM** available to Docker/Kind. Grafana initially failed to start when restricted to **256 MiB**, so its limits were increased.
-
-Configured resource budgets:
+The locally validated Docker/Kind environment had **2 logical CPUs** and approximately **3.28 GiB RAM** assigned to Docker. Grafana did not start reliably with an earlier 256 MiB limit; the versioned configuration provides a larger allocation.
 
 | Component | CPU request | CPU limit | Memory request | Memory limit |
 |---|---:|---:|---:|---:|
@@ -83,93 +61,73 @@ Configured resource budgets:
 | Blackbox Exporter | 10m | 100m | 24 MiB | 64 MiB |
 | Grafana | 500m | 2000m | 1 GiB | 1536 MiB |
 
-These are **Kubernetes resource requests and limits**, not measurements of actual usage. The cluster also runs system services, the frontend, and the PocketBase backend. Check resources before deployment:
+Requests reserve schedulable capacity; limits cap usage. The cluster also runs the application and Kubernetes system processes. Check node allocations before troubleshooting memory or CPU problems:
 
 ```powershell
-docker info --format "Docker CPUs: {{.NCPU}} | Memory: {{.MemTotal}} bytes"
 kubectl describe node feedback-board-control-plane
 ```
 
-Look at `Allocatable`, `Allocated resources`, and node conditions. A Pod can remain `Pending` if resource **requests** cannot be scheduled. A container can be terminated if it exceeds its memory **limit**. Do not solve resource problems by arbitrarily lowering Grafana's memory limit.
+## Install monitoring locally
 
-## Install the monitoring stack
+The Helm chart versions below are the same versions pinned in `.github/workflows/cd.yml`. Do not silently replace them with newer versions when trying to reproduce the tested environment.
 
-Run all commands from the **repository root** unless stated otherwise.
-
-### 1. Create the monitoring namespace
+### 1. Namespace and Helm repositories
 
 ```powershell
 kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
-```
-
-### 2. Add Helm repositories
-
-```powershell
-helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-helm repo add grafana-community https://grafana-community.github.io/helm-charts
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update
+helm repo add grafana-community https://grafana-community.github.io/helm-charts --force-update
 helm repo update
 ```
 
-### 3. Install Prometheus
+### 2. Prometheus
 
 ```powershell
 helm upgrade --install prometheus prometheus-community/prometheus `
+  --version 29.45.1 `
   --namespace monitoring `
   --values monitoring/prometheus-values.yaml `
-  --wait --timeout 5m
+  --wait --timeout 10m
 ```
 
-Prometheus is configured with a 24-hour metrics retention period and **no persistent volume**. Several additional components (Alertmanager, kube-state-metrics, node-exporter, and Pushgateway) are disabled to limit resource usage in this local environment.
+The configuration uses 24-hour metric retention, disables Prometheus persistent storage, and disables Alertmanager, kube-state-metrics, node-exporter and Pushgateway to conserve resources. **Grafana**, not Alertmanager, evaluates the two application availability alerts.
 
-### 4. Install Blackbox Exporter
+### 3. Blackbox Exporter
 
 ```powershell
 helm upgrade --install blackbox prometheus-community/prometheus-blackbox-exporter `
+  --version 11.21.1 `
   --namespace monitoring `
   --values monitoring/blackbox-values.yaml `
-  --wait --timeout 5m
+  --wait --timeout 10m
 ```
 
-The Blackbox `http_2xx` module checks two HTTP endpoints:
+The configured HTTP targets are:
 
-| Target | Address |
+| Target | Probe address |
 |---|---|
 | Frontend | `http://frontend.feedback-board.svc.cluster.local/` |
-| Backend health check | `http://backend.feedback-board.svc.cluster.local:8090/api/health` |
+| Backend health | `http://backend.feedback-board.svc.cluster.local:8090/api/health` |
 
-The Prometheus job is named `feedback-board-http`, with a **30-second scrape interval**. `probe_success` is `1` for successful probes and `0` for failed probes.
+Prometheus job `feedback-board-http` scrapes every **30 seconds**. `probe_success = 1` indicates an HTTP probe succeeded; `0` indicates failure. Missing samples or a query error should be investigated separately.
 
-### 5. Create the Grafana dashboard ConfigMap
+### 4. Grafana ConfigMaps
 
 ```powershell
 .\monitoring\apply-dashboard.ps1
+.\monitoring\apply-alerts.ps1
 ```
 
-Equivalent manual command:
+Both scripts are idempotent: they create or update the existing ConfigMaps. Confirm their existence:
 
 ```powershell
-kubectl create configmap feedback-board-grafana-dashboard `
-  --namespace monitoring `
-  --from-file=feedback-board.json=monitoring/dashboards/feedback-board.json `
-  --dry-run=client -o yaml | kubectl apply -f -
+kubectl get configmap feedback-board-grafana-dashboard -n monitoring
+kubectl get configmap feedback-board-grafana-alerts -n monitoring
 ```
 
-### 6. Create the Grafana alert rules ConfigMap
+### 5. Grafana
 
-```powershell
-kubectl create configmap feedback-board-grafana-alerts `
-  --namespace monitoring `
-  --from-file=feedback-board-alerts.yaml=monitoring/alerting/feedback-board-alerts.yaml `
-  --dry-run=client -o yaml | kubectl apply -f -
-```
-
-> **Important:** Both ConfigMaps are currently required by `monitoring/grafana-values.yaml`. Creating them after Grafana installation can prevent the Grafana Pod from starting until the missing ConfigMaps exist.
-
-### 7. Install Grafana
-
-The validated Grafana Helm chart version is **`14.4.0`**. Pinning this version improves reproducibility; do not silently switch to the latest chart during a repeatable deployment.
-
-Validate the template first:
+First validate the chart template:
 
 ```powershell
 helm template grafana grafana-community/grafana `
@@ -178,7 +136,7 @@ helm template grafana grafana-community/grafana `
   --values monitoring/grafana-values.yaml > $null
 ```
 
-Install or upgrade:
+Then install or upgrade:
 
 ```powershell
 helm upgrade --install grafana grafana-community/grafana `
@@ -188,64 +146,57 @@ helm upgrade --install grafana grafana-community/grafana `
   --wait --timeout 20m
 ```
 
-Grafana uses one replica and a `Recreate` deployment strategy to avoid running two Grafana instances during updates on resource-constrained hardware. A startup probe allows additional time for initial startup. The Prometheus data source is provisioned automatically.
+Grafana 13.3.0 is deployed with one replica, `Recreate` updates, startup checks, a provisioned Prometheus data source, a ConfigMap-backed dashboard, and file-provisioned alert rules. This avoids running two Grafana Pods simultaneously during updates on constrained hardware.
 
-### 8. Validate the Pods and releases
+### 6. Confirm the stack
 
 ```powershell
 kubectl get pods -n monitoring
+kubectl get services -n monitoring
 helm list -n monitoring
-kubectl get configmaps -n monitoring
 ```
 
-Expected states after successful deployment:
+Expected healthy readiness: Blackbox `1/1`, Grafana `1/1`, and Prometheus server `2/2`. Do not assume a Pod is healthy based only on `STATUS=Running`; inspect its `READY` count.
 
-- Prometheus server: `2/2 Running`.
-- Blackbox Exporter: `1/1 Running`.
-- Grafana: `1/1 Running`.
-- Helm releases: `deployed`.
+## Access Grafana and Prometheus
 
-## Access the UIs
+Run each `kubectl port-forward` in a separate terminal and keep it open.
 
-The following commands run in the foreground. Keep each `port-forward` terminal open while using the corresponding web UI.
-
-### Grafana
+**Grafana:**
 
 ```powershell
 kubectl port-forward -n monitoring service/grafana 3000:80
 ```
 
-Open <http://localhost:3000>.
-
-Login: `admin`. Retrieve the local admin password **without posting it in logs or commits**:
+Open <http://localhost:3000>. Login is `admin`; retrieve the password from the Kubernetes Secret:
 
 ```powershell
 $secret = kubectl get secret grafana -n monitoring -o jsonpath="{.data.admin-password}"
 [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($secret))
 ```
 
-Under **Connections → Data sources**, Prometheus should already be configured. The dashboard is available in **Dashboards → Feedback Board → Feedback Board Monitoring**.
+Do not print this password in CI logs or commit it to the repository. In Grafana, open **Dashboards → Feedback Board → Feedback Board Monitoring**. The Prometheus data source is provisioned automatically.
 
-### Prometheus
+**Prometheus:**
 
 ```powershell
 kubectl port-forward -n monitoring service/prometheus-server 9090:80
 ```
 
-Open <http://localhost:9090>. Inspect **Status → Targets** and query the `feedback-board-http` job.
+Open <http://localhost:9090> and inspect **Status → Targets** or run a PromQL query.
 
-## Dashboard
+## Dashboard and metrics
 
-Dashboard source: `monitoring/dashboards/feedback-board.json`.
+The source file is `dashboards/feedback-board.json`. The **Feedback Board Monitoring** dashboard contains four panels:
 
-The **Feedback Board Monitoring** dashboard contains:
+| Panel | Metric |
+|---|---|
+| Frontend Availability | Frontend `probe_success` (UP/DOWN) |
+| Backend Availability | Backend `probe_success` (UP/DOWN) |
+| Frontend Response Time | Frontend `probe_duration_seconds` |
+| Backend Response Time | Backend `probe_duration_seconds` |
 
-1. **Frontend Availability** — `UP` when the frontend probe succeeds.
-2. **Backend Availability** — `UP` when the backend health probe succeeds.
-3. **Frontend Response Time** — Blackbox probe duration in seconds.
-4. **Backend Response Time** — Blackbox probe duration in seconds.
-
-Example PromQL queries:
+Useful PromQL queries:
 
 ```promql
 probe_success{job="feedback-board-http"}
@@ -255,167 +206,77 @@ probe_success{job="feedback-board-http"}
 probe_duration_seconds{job="feedback-board-http"}
 ```
 
-`probe_duration_seconds` measures the **total probe duration**, not solely application-side HTTP processing latency. Panels refresh every 30 seconds. Shortly after a Grafana restart, instant panels may temporarily display `No data` until fresh metrics are available; this should not automatically be interpreted as downtime.
-
-The dashboard JSON is stored in Git, placed into the `feedback-board-grafana-dashboard` ConfigMap, and loaded using Grafana's file dashboard provider declared in `grafana-values.yaml`.
+`probe_duration_seconds` is the **end-to-end probe duration**, not strictly application-side processing latency. The dashboard refreshes every 30 seconds. After a restart, the panel may briefly display `No data` until fresh samples arrive.
 
 ## Alert rules
 
-Alert source: `monitoring/alerting/feedback-board-alerts.yaml`.
+The source file is `alerting/feedback-board-alerts.yaml`, loaded by Grafana file provisioning:
 
-| Rule | Trigger | Evaluation group | Pending period |
+| Rule | Condition | Evaluation | Pending period |
 |---|---|---|---|
-| `Feedback Board - Frontend Down` | Frontend `probe_success < 1` | `feedback-board-availability` | 2 min |
-| `Feedback Board - Backend Down` | Backend `probe_success < 1` | `feedback-board-availability` | 2 min |
+| `Feedback Board - Frontend Down` | Frontend `probe_success < 1` | Every 1 minute | 2 minutes |
+| `Feedback Board - Backend Down` | Backend `probe_success < 1` | Every 1 minute | 2 minutes |
 
-The group evaluates every **1 minute**. The rules use `noDataState: NoData` and `execErrState: Error`, so missing data or query errors are separate states from an HTTP probe returning `0`.
+The rules are visible under **Alerting → Alert rules**. `noDataState: NoData` and `execErrState: Error` distinguish missing data and evaluation errors from an actual failed HTTP probe.
 
-Alert rules are read from the ConfigMap mounted under `/etc/grafana/provisioning/alerting/` when Grafana starts. They should show as provisioned rules under **Alerting → Alert rules**.
+**Observed:** the two rules were provisioned and displayed in the `Normal` state. **Not yet tested:** deliberately causing an outage and observing `Pending → Firing → Normal` recovery. **No external email/webhook/paging contact point** has been configured; do not claim notifications were delivered.
 
-**Notification limitation:** This setup evaluates alert states but does **not** configure a real email, webhook, or paging destination. The original UI-only `empty` contact point had no integrations; its reference was intentionally removed from the exported YAML. Do not claim alert delivery has been demonstrated.
+## Updating dashboards and alerts
 
-**Testing status:** The rules were observed in the `Normal` state. A controlled outage causing `Pending` → `Firing` → `Normal` recovery has **not yet been performed**. Treat the firing/recovery test as outstanding validation, not as completed evidence.
+After changing the version-controlled dashboard JSON or alert rules YAML, apply the appropriate ConfigMap:
 
-## Updating dashboards or alerts
+```powershell
+.\monitoring\apply-dashboard.ps1
+.\monitoring\apply-alerts.ps1
+```
 
-### Dashboard change
+A modified ConfigMap does **not necessarily cause Grafana to reload file-provisioned alert definitions immediately**. When necessary, perform a controlled restart and wait for readiness:
 
-1. Edit `monitoring/dashboards/feedback-board.json`.
-2. Apply the updated ConfigMap:
+```powershell
+kubectl rollout restart deployment/grafana -n monitoring
+kubectl rollout status deployment/grafana -n monitoring --timeout=20m
+```
 
-   ```powershell
-   .\monitoring\apply-dashboard.ps1
-   ```
+Confirm the dashboard and alert rules in the UI or API. Keep provisioned rule UIDs stable; do not create duplicate rules manually. **Grafana persistence is disabled**, so changes made only in the UI may be lost when its Pod is replaced. Keep intended configuration in Git.
 
-3. Verify the dashboard in Grafana. If changes are not reflected, confirm that the updated ConfigMap is mounted and consider a controlled Grafana restart.
-4. Commit the JSON file and any accompanying configuration change.
+## CI/CD integration
 
-### Alert change
+`.github/workflows/cd.yml` deploys the application into a temporary Kind cluster, runs smoke tests, then installs **Prometheus (chart 29.45.1)**, **Blackbox Exporter (chart 11.21.1)** and **Grafana (chart 14.4.0)**. It creates both ConfigMaps from the files in Git **before** installing Grafana. It then checks Kubernetes readiness, both Prometheus HTTP probes, the dashboard UID, and the two alert rule UIDs through the Grafana API.
 
-1. Edit `monitoring/alerting/feedback-board-alerts.yaml`.
-2. Update the ConfigMap:
-
-   ```powershell
-   kubectl create configmap feedback-board-grafana-alerts `
-     --namespace monitoring `
-     --from-file=feedback-board-alerts.yaml=monitoring/alerting/feedback-board-alerts.yaml `
-     --dry-run=client -o yaml | kubectl apply -f -
-   ```
-
-3. For a **file-provisioned rule change**, recreate the Grafana Pod via the Deployment after confirming the ConfigMap is correct:
-
-   ```powershell
-   kubectl rollout restart deployment/grafana -n monitoring
-   kubectl rollout status deployment/grafana -n monitoring --timeout=20m
-   ```
-
-4. Inspect **Alerting → Alert rules** and the Grafana logs. Keep the rule UIDs stable; avoid manually creating duplicate rules with the same UIDs in the UI.
-
-> **Warning:** Grafana persistence is currently disabled. A restart discards changes created only through the UI; only provisioned resources are guaranteed to be reconstructed from the files described here. Back up any additional UI-created configuration before restarting.
+This verifies provisioning in an ephemeral cluster; it is **not** a production release pipeline and does not verify actual alert delivery or a complete failure/recovery alert cycle.
 
 ## Troubleshooting
 
-### Grafana Pod is Pending
-
-```powershell
-kubectl describe pod -n monitoring -l app.kubernetes.io/name=grafana
-kubectl describe node feedback-board-control-plane
-```
-
-Look for `Insufficient cpu`, `Insufficient memory`, missing ConfigMaps, or image pull failures. Requests determine scheduling; limits determine allowable runtime usage.
-
-### Grafana is Running but not Ready
+For Pod status, events and logs:
 
 ```powershell
 kubectl get pods -n monitoring
-kubectl logs -n monitoring deployment/grafana --tail=100
+kubectl get events -n monitoring
 kubectl describe pod -n monitoring -l app.kubernetes.io/name=grafana
+kubectl logs -n monitoring deployment/grafana --tail=100
+kubectl logs -n monitoring deployment/prometheus-server --tail=100
+kubectl logs -n monitoring deployment/blackbox-prometheus-blackbox-exporter --tail=100
 ```
 
-Look for startup/liveness probe failures, slow plugin loading, and memory termination events. The previously attempted 256 MiB limit was insufficient for this local setup; use the versioned resource allocation instead of repeatedly removing health checks.
+If Grafana is `0/1 Running`, check startup probe failures, available node resources and mounted ConfigMaps. Its initial startup can be slow; do not immediately reduce its memory limits or reinstall the stack.
 
-### `No data` in a panel
-
-In Grafana **Explore**, run:
-
-```promql
-probe_success{job="feedback-board-http"}
-```
-
-Then check Prometheus targets and Blackbox logs:
+If a dashboard shows `No data`, run the `probe_success` query in Prometheus, inspect the `feedback-board-http` target and verify the application Pods:
 
 ```powershell
-kubectl logs -n monitoring deployment/blackbox-prometheus-blackbox-exporter --tail=50
 kubectl get pods -n feedback-board
-```
-
-A missing sample is not automatically equivalent to an HTTP probe failure.
-
-### Dashboard or alert missing after restart
-
-```powershell
 kubectl get configmap feedback-board-grafana-dashboard -n monitoring
 kubectl get configmap feedback-board-grafana-alerts -n monitoring
-kubectl describe pod -n monitoring -l app.kubernetes.io/name=grafana
-kubectl logs -n monitoring deployment/grafana --tail=100
 ```
 
-Ensure that both ConfigMaps exist and the Grafana values file mounts/provisions their respective files. The ConfigMaps were created **manually/scripted on the local cluster**, not yet by the CD workflow.
+During a recent local Docker/Kind restart, `kubectl` briefly returned `EOF` while retrieving the Kubernetes OpenAPI schema. Once the node and monitoring Pods recovered, retrying `apply-alerts.ps1` succeeded. Such connectivity errors should be diagnosed before editing valid provisioning YAML.
 
-### Docker/Kind image-import errors
+## Data, security and limitations
 
-The local Kind environment previously encountered `ctr: content digest ... not found` when loading a Grafana image. An alternative was to export the platform-specific image and load the archive:
+- Prometheus measurements and Grafana's internal database are **not persistent**. Retention is configured at 24 hours, but the measurements can disappear sooner when temporary Pod storage is replaced.
+- PocketBase application data is stored separately on the `feedback-board` backend PVC, not in monitoring volumes.
+- This setup exposes UIs locally through port-forwarding, not a public Ingress/LoadBalancer.
+- There is **no external alert notification destination** and no demonstrated alert firing/recovery test yet.
+- Kubernetes logs remain accessible using `kubectl logs`. **No centralized logging collector (for example, Loki) is installed.**
+- A production deployment would require hardening, persistent monitoring storage where needed, backups, authentication, TLS, access policies, and alert notification configuration.
 
-```powershell
-docker image save --platform linux/amd64 --output grafana-image.tar grafana/grafana:13.3.0-distroless
-kind load image-archive grafana-image.tar --name feedback-board
-```
-
-Use this only if the corresponding error occurs; it is **not** part of routine installation. Remove the temporary archive when finished to free disk space.
-
-## Persistence, security, and limitations
-
-- **Prometheus metrics:** not persistent; retention is configured for 24 hours, but all collected metrics are lost if the Prometheus Pod's temporary storage is replaced.
-- **Grafana internal database:** not persistent. Dashboards and alert rules stored in Git can be reconstructed through their ConfigMaps; other UI-created changes may be lost.
-- **PocketBase application data:** managed separately by the backend PVC in the `feedback-board` namespace. Monitoring setup and removal must not delete that PVC.
-- **Access:** Grafana is exposed locally using `kubectl port-forward`, not a public LoadBalancer or Ingress. Use the generated admin password; never commit passwords or Kubernetes Secrets.
-- **Notifications:** alert evaluation is implemented, but no real notification destination is configured.
-- **Alert firing/recovery test:** deferred and not yet demonstrated.
-- **CD integration:** not yet implemented. A new cluster currently requires executing the monitoring installation and ConfigMap steps above in order.
-- **Logs:** Kubernetes container logs can be viewed with `kubectl logs`; a centralized logging pipeline (e.g., Loki) is not installed in this stack.
-
-## Further work
-
-- Automate creation of the **alert ConfigMap** in the deployment process (the dashboard already has `apply-dashboard.ps1`).
-- Integrate Prometheus, Blackbox Exporter, Grafana, and both ConfigMaps into the Kubernetes CD workflow **after** monitoring configuration and tests are complete.
-- Run a controlled frontend/backend outage and record evidence of alert transitions to `Firing` and back to `Normal`.
-- Configure a real notification contact point if notification delivery is required.
-- Consider persistent volumes and backup/restore procedures for long-lived environments.
-- Add centralized log aggregation if required by the assignment rubric.
-
-## Useful commands
-
-```powershell
-# Show monitoring components
-kubectl get pods -n monitoring
-helm list -n monitoring
-
-# Show application components
-kubectl get pods -n feedback-board
-
-# Read recent Grafana logs
-kubectl logs -n monitoring deployment/grafana --tail=100
-
-# Read recent Prometheus logs
-kubectl logs -n monitoring deployment/prometheus-server --tail=100
-
-# List the Grafana-related ConfigMaps
-kubectl get configmap -n monitoring
-
-# Check Helm's installed Grafana release
-helm status grafana -n monitoring
-```
-
----
-
-**Project:** Feedback Board · **Environment:** local Kubernetes (Kind) · **Monitoring:** Prometheus + Blackbox Exporter + Grafana
+Back to [project README](../README.md).
