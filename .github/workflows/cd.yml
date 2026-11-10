@@ -18,15 +18,19 @@ permissions:
 
 jobs:
   kubernetes-deployment:
-    name: Kubernetes Deployment Test
+    name: Kubernetes Deployment and Monitoring Test
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     if: >-
       github.event_name == 'pull_request' ||
       github.event.workflow_run.conclusion == 'success'
 
     steps:
+      # ==========================================
+      # 1. Repository and tools
+      # ==========================================
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
@@ -37,6 +41,15 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22.23.4'
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.19.0
+
+      # ==========================================
+      # 2. Create Kubernetes cluster
+      # ==========================================
 
       - name: Create Kind Kubernetes cluster
         uses: helm/kind-action@v1
@@ -49,6 +62,11 @@ jobs:
         run: |
           kubectl get nodes
           kubectl cluster-info
+          helm version
+
+      # ==========================================
+      # 3. Build and deploy application
+      # ==========================================
 
       - name: Build Docker images
         run: |
@@ -57,11 +75,15 @@ jobs:
 
       - name: Load Docker images into Kind
         run: |
-          kind load docker-image feedback-board-backend:dev --name feedback-board
-          kind load docker-image feedback-board-frontend:dev --name feedback-board
+          kind load docker-image feedback-board-backend:dev \
+            --name feedback-board
+
+          kind load docker-image feedback-board-frontend:dev \
+            --name feedback-board
 
       - name: Deploy Kubernetes namespace
-        run: kubectl apply -f k8s/namespace.yaml
+        run: |
+          kubectl apply -f k8s/namespace.yaml
 
       - name: Deploy PocketBase storage and backend
         run: |
@@ -88,6 +110,10 @@ jobs:
           kubectl get services -n feedback-board
           kubectl get pvc -n feedback-board
 
+      # ==========================================
+      # 4. Application smoke tests
+      # ==========================================
+
       - name: Run Kubernetes smoke tests
         env:
           SMOKE_BASE_URL: http://127.0.0.1:8081
@@ -102,9 +128,263 @@ jobs:
 
           node scripts/smoke-test.mjs
 
+      # ==========================================
+      # 5. Monitoring prerequisites
+      # ==========================================
+
+      - name: Create monitoring namespace
+        run: |
+          kubectl create namespace monitoring \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Configure monitoring Helm repositories
+        run: |
+          helm repo add prometheus-community \
+            https://prometheus-community.github.io/helm-charts
+
+          helm repo add grafana-community \
+            https://grafana-community.github.io/helm-charts
+
+          helm repo update
+
+      # ==========================================
+      # 6. Install Prometheus
+      # ==========================================
+
+      - name: Install Prometheus
+        run: |
+          helm upgrade --install prometheus \
+            prometheus-community/prometheus \
+            --version 29.45.1 \
+            --namespace monitoring \
+            --values monitoring/prometheus-values.yaml \
+            --wait \
+            --timeout 10m
+
+      # ==========================================
+      # 7. Install Blackbox Exporter
+      # ==========================================
+
+      - name: Install Blackbox Exporter
+        run: |
+          helm upgrade --install blackbox \
+            prometheus-community/prometheus-blackbox-exporter \
+            --version 11.21.1 \
+            --namespace monitoring \
+            --values monitoring/blackbox-values.yaml \
+            --wait \
+            --timeout 10m
+
+      # ==========================================
+      # 8. Grafana ConfigMaps
+      # ==========================================
+
+      - name: Apply Grafana dashboard ConfigMap
+        run: |
+          kubectl create configmap feedback-board-grafana-dashboard \
+            --namespace monitoring \
+            --from-file=feedback-board.json=monitoring/dashboards/feedback-board.json \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Apply Grafana alert rules ConfigMap
+        run: |
+          kubectl create configmap feedback-board-grafana-alerts \
+            --namespace monitoring \
+            --from-file=feedback-board-alerts.yaml=monitoring/alerting/feedback-board-alerts.yaml \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      # ==========================================
+      # 9. Install Grafana
+      # ==========================================
+
+      - name: Validate Grafana Helm template
+        run: |
+          helm template grafana grafana-community/grafana \
+            --version 14.4.0 \
+            --namespace monitoring \
+            --values monitoring/grafana-values.yaml \
+            > /dev/null
+
+      - name: Install Grafana
+        run: |
+          helm upgrade --install grafana \
+            grafana-community/grafana \
+            --version 14.4.0 \
+            --namespace monitoring \
+            --values monitoring/grafana-values.yaml \
+            --wait \
+            --timeout 20m
+
+      # ==========================================
+      # 10. Verify monitoring components
+      # ==========================================
+
+      - name: Verify monitoring deployments
+        run: |
+          kubectl rollout status deployment/prometheus-server \
+            -n monitoring --timeout=180s
+
+          kubectl rollout status \
+            deployment/blackbox-prometheus-blackbox-exporter \
+            -n monitoring --timeout=180s
+
+          kubectl rollout status deployment/grafana \
+            -n monitoring --timeout=180s
+
+          kubectl get pods -n monitoring
+          kubectl get services -n monitoring
+          helm list -n monitoring
+
+      - name: Verify Grafana ConfigMaps
+        run: |
+          kubectl get configmap \
+            feedback-board-grafana-dashboard \
+            -n monitoring
+
+          kubectl get configmap \
+            feedback-board-grafana-alerts \
+            -n monitoring
+
+      # ==========================================
+      # 11. Verify monitoring data
+      # ==========================================
+
+      - name: Verify Prometheus HTTP probes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          kubectl port-forward \
+            -n monitoring \
+            service/prometheus-server 9090:80 \
+            > /tmp/prometheus-port-forward.log 2>&1 &
+
+          PF_PID=$!
+          trap 'kill "$PF_PID" 2>/dev/null || true' EXIT
+
+          QUERY='probe_success{job="feedback-board-http"}'
+
+          for attempt in $(seq 1 30); do
+            echo "Checking HTTP probes (attempt $attempt/30)..."
+
+            if curl --silent --show-error --fail \
+              --get \
+              --data-urlencode "query=$QUERY" \
+              http://127.0.0.1:9090/api/v1/query \
+              -o /tmp/feedback-board-probes.json; then
+
+              if jq -e '
+                .status == "success" and
+                (
+                  [.data.result[]
+                   | select(
+                       .value[1] == "1" and
+                       (
+                         .metric.instance ==
+                         "http://frontend.feedback-board.svc.cluster.local/"
+                         or
+                         .metric.instance ==
+                         "http://backend.feedback-board.svc.cluster.local:8090/api/health"
+                       )
+                     )]
+                  | length
+                ) == 2
+              ' /tmp/feedback-board-probes.json > /dev/null; then
+
+                echo "Frontend and backend HTTP probes are UP."
+                exit 0
+              fi
+            fi
+
+            sleep 10
+          done
+
+          echo "ERROR: Expected frontend and backend probes to be UP."
+          cat /tmp/feedback-board-probes.json 2>/dev/null || true
+          exit 1
+
+      # ==========================================
+      # 12. Verify Grafana provisioning
+      # ==========================================
+
+      - name: Verify Grafana dashboard and alerts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          kubectl port-forward \
+            -n monitoring \
+            service/grafana 3000:80 \
+            > /tmp/grafana-port-forward.log 2>&1 &
+
+          PF_PID=$!
+          trap 'kill "$PF_PID" 2>/dev/null || true' EXIT
+
+          GRAFANA_PASSWORD="$(
+            kubectl get secret grafana \
+              -n monitoring \
+              -o jsonpath='{.data.admin-password}' | base64 -d
+          )"
+
+          echo "Checking provisioned Grafana dashboard..."
+
+          DASHBOARD_OK=false
+
+          for attempt in $(seq 1 30); do
+            if curl --silent --show-error --fail \
+              --user "admin:$GRAFANA_PASSWORD" \
+              http://127.0.0.1:3000/api/dashboards/uid/feedback-board-monitoring \
+              -o /tmp/grafana-dashboard.json; then
+
+              if jq -e '
+                .dashboard.uid == "feedback-board-monitoring"
+              ' /tmp/grafana-dashboard.json > /dev/null; then
+                DASHBOARD_OK=true
+                break
+              fi
+            fi
+
+            sleep 10
+          done
+
+          if [ "$DASHBOARD_OK" != "true" ]; then
+            echo "ERROR: Grafana dashboard not found."
+            exit 1
+          fi
+
+          echo "Dashboard provisioned successfully."
+          echo "Checking provisioned alert rules..."
+
+          curl --silent --show-error --fail \
+            --user "admin:$GRAFANA_PASSWORD" \
+            http://127.0.0.1:3000/api/v1/provisioning/alert-rules \
+            -o /tmp/grafana-alert-rules.json
+
+          jq -e '
+            (
+              [.[] | select(
+                .uid == "cg3pawizhlypsd"
+              )] | length
+            ) == 1
+            and
+            (
+              [.[] | select(
+                .uid == "dg3pbjipxbk74b"
+              )] | length
+            ) == 1
+          ' /tmp/grafana-alert-rules.json > /dev/null
+
+          echo "Frontend and backend alert rules provisioned successfully."
+
+      # ==========================================
+      # 13. Collect diagnostics
+      # ==========================================
+
       - name: Collect Kubernetes diagnostics
         if: always()
         run: |
+          echo "=== Feedback Board ==="
+
           kubectl get all -n feedback-board || true
           kubectl get pvc -n feedback-board || true
           kubectl get events -n feedback-board || true
@@ -115,4 +395,29 @@ jobs:
           kubectl logs deployment/frontend \
             -n feedback-board --tail=100 || true
 
-          cat /tmp/feedback-board-port-forward.log 2>/dev/null || true
+          echo "=== Monitoring ==="
+
+          kubectl get all -n monitoring || true
+          kubectl get events -n monitoring || true
+          helm list -n monitoring || true
+
+          kubectl logs deployment/prometheus-server \
+            -n monitoring --all-containers=true --tail=100 || true
+
+          kubectl logs \
+            deployment/blackbox-prometheus-blackbox-exporter \
+            -n monitoring --tail=100 || true
+
+          kubectl logs deployment/grafana \
+            -n monitoring --tail=100 || true
+
+          echo "=== Port-forward logs ==="
+
+          cat /tmp/feedback-board-port-forward.log \
+            2>/dev/null || true
+
+          cat /tmp/prometheus-port-forward.log \
+            2>/dev/null || true
+
+          cat /tmp/grafana-port-forward.log \
+            2>/dev/null || true
