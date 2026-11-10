@@ -1,0 +1,54 @@
+# Lightweight Prometheus configuration
+# Feedback Board DevOps Project
+
+alertmanager:
+  enabled: false
+
+kube-state-metrics:
+  enabled: false
+
+prometheus-node-exporter:
+  enabled: false
+
+prometheus-pushgateway:
+  enabled: false
+
+server:
+  retention: "24h"
+
+  persistentVolume:
+    enabled: false
+
+  resources:
+    requests:
+      memory: 128Mi
+      cpu: 50m
+    limits:
+      memory: 384Mi
+      cpu: 300m
+
+# Monitor frontend and backend through Blackbox Exporter
+
+extraScrapeConfigs: |
+  - job_name: "feedback-board-http"
+    scrape_interval: 30s
+    scrape_timeout: 10s
+    metrics_path: /probe
+
+    params:
+      module: [http_2xx]
+
+    static_configs:
+      - targets:
+          - http://frontend.feedback-board.svc.cluster.local/
+          - http://backend.feedback-board.svc.cluster.local:8090/api/health
+
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+
+      - source_labels: [__param_target]
+        target_label: instance
+
+      - target_label: __address__
+        replacement: blackbox-prometheus-blackbox-exporter.monitoring.svc.cluster.local:9115
